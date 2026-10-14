@@ -29,10 +29,6 @@ causing misattributed or unbillable consumption until an operator corrects it by
 ## Out of Scope
 
 - Console UI for setting or reading the identifier — a future increment.
-- Modifying or correcting a tenant's external billing identifier after onboarding,
-  and reconciling consumption already reported under the previous value — deferred
-  to a follow-on Feature.
-- Backfilling external billing identifiers for tenants onboarded before this feature.
 - Associating a tenant with more than one external billing system or account.
 - Verifying that a supplied identifier corresponds to a real account in the external
   billing system — OSAC has no access to the external system at onboarding time.
@@ -61,6 +57,6 @@ causing misattributed or unbillable consumption until an operator corrects it by
 ## Provenance
 
 Authored: respond @ prd 0.11.5 - 1c6e8de, workspace main @ f0a8211
-Phases: draft, respond
+Phases: draft, respond, respond
 
-<!-- ai-workflow-provenance:{"schema_version":1,"provenance_kind":"session","workflow":"prd","workflow_version":"0.11.5","ai_workflows":"1c6e8de","source_repo":"f0a8211","source_repo_branch":"main","commits_behind_main":0,"commits_ahead_main":0,"main_ref":"main","phases":["draft","respond"],"authoring_modes":["skill"],"context_changed":false,"origin_untracked":false} -->
+<!-- ai-workflow-provenance:{"schema_version":1,"provenance_kind":"session","workflow":"prd","workflow_version":"0.11.5","ai_workflows":"1c6e8de","source_repo":"f0a8211","source_repo_branch":"main","commits_behind_main":0,"commits_ahead_main":0,"main_ref":"main","phases":["draft","respond","respond"],"authoring_modes":["skill"],"context_changed":false,"origin_untracked":false} -->

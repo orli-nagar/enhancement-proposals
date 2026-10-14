@@ -28,7 +28,7 @@ causing misattributed or unbillable consumption until an operator corrects it by
 - Changing a tenant's external billing identifier takes effect going forward:
   consumption OSAC reports after the change is attributed to the new identifier,
   and consumption already reported under the previous identifier is unchanged.
-  
+
 ## Out of Scope
 
 - Console UI for setting or reading the identifier — a future increment.

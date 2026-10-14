@@ -34,7 +34,7 @@ Which interfaces are in scope for 0.5: Fulfillment API, osac CLI, or Enclave Wiz
 
 #### Answer
 
-Fulfillment API (gRPC/REST) and osac CLI. Enclave Wizard is not in scope and should be ignored. The CLI flag should be `--external-billing-id` (not `--billing-id`) to avoid confusion with a future billing-account-id concept.
+Fulfillment API (gRPC/REST). Enclave Wizard and console UI are not in scope. There is no CLI flag to add: a Cloud Provider Admin creates a tenant with osac create -f and a YAML definition, so the identifier is a field in the tenant definition and reaches the CLI path automatically.
 
 #### Impact
 
@@ -56,11 +56,11 @@ Sufficient to read the field on the Tenant resource. Present = associated with a
 
 #### Impact
 
-The PRD states observability as: a Cloud Provider Admin can read the external identifier field on a tenant via API or CLI. No additional observability surface is in scope.
+The PRD states observability as: a Cloud Provider Admin can read the external identifier field on a tenant via API. No additional observability surface is in scope.
 
 #### Decision (D3)
 
-Observability is field-presence on the Tenant resource (read via API/CLI). No status condition or list-level indicator is in scope.
+Observability is field-presence on the Tenant resource (read via API). No status condition or list-level indicator is in scope.
 
 ---
 
@@ -80,21 +80,21 @@ The osac-ui and osac-ux labels are not reflected in the PRD. UI is out of scope 
 
 ## Round 2 — CLI tenant creation
 
-### R2.Q1: Does `osac create tenant` exist today?
+### R2.Q1: How is a tenant created through the CLI?
 
-Tenant creation in the CLI does not exist (no `osac create tenant` command found in source). Interface scope was narrowed accordingly.
+A Cloud Provider Admin creates a tenant using `osac create -f` and a YAML definition. There is no dedicated `osac create tenant` subcommand; `osac tenant` only selects the active tenant for later CLI operations.
 
 #### Answer
 
-Stick to the current method — API only. No CLI support for this Feature.
+A Cloud Provider Admin creates a tenant with `osac create -f` and a YAML definition. There is no dedicated `osac create tenant` subcommand; `osac tenant` selects the tenant for later CLI commands.
 
 #### Impact
 
-User stories and in-scope description reference the Fulfillment API only for setting and reading the external identifier.
+No CLI-specific work is required for this feature. The external billing identifier is a field in the tenant definition and flows through `osac create -f` automatically once added to the schema. D2 stands — no CLI flag or command change is needed.
 
 #### Decision (D4)
 
-CLI is out of scope. D2 is superseded: the only in-scope interface is the Fulfillment API (gRPC/REST).
+No CLI-specific work is required. The identifier is a field in the tenant definition, so it flows through `osac create -f` without a command or flag change. D2 stands.
 
 ---
 

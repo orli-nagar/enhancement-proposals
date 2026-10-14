@@ -2,7 +2,7 @@
 
 | Field     | Value                                                              |
 |-----------|--------------------------------------------------------------------|
-| Author(s) | [Author — please confirm]                                          |
+| Author(s) | Orli Nagar                                         |
 | Jira      | [OSAC-6161](https://redhat.atlassian.net/browse/OSAC-6161)        |
 | Date      | October 13, 2026                                                   |
 
@@ -22,13 +22,13 @@ causing misattributed or unbillable consumption until an operator corrects it by
   at creation time via the Fulfillment API and read it back on the tenant resource.
 - The external billing identifier is provider-controlled and inaccessible to Tenant
   Admins and Tenant Users through any interface.
-- Consumption reported to the external billing system is attributable to the correct
-  external account for every metered resource type, for tenants that have an external
-  billing identifier recorded. [Clarify: R1.Q1]
+- For a tenant with a recorded external billing identifier, consumption OSAC
+  reports for that tenant can be located under the corresponding account in the
+  external billing system, for every metered resource type.
 
 ## Out of Scope
 
-- CLI and console UI for setting or reading the identifier — a future increment.
+- Console UI for setting or reading the identifier — a future increment.
 - Modifying or correcting a tenant's external billing identifier after onboarding,
   and reconciling consumption already reported under the previous value — deferred
   to a follow-on Feature.
@@ -48,22 +48,19 @@ causing misattributed or unbillable consumption until an operator corrects it by
   attributed to the correct billing account from the start.
 - As a Cloud Provider Admin, I want to read the external billing identifier on a
   tenant via the Fulfillment API, so that I can confirm the tenant is correctly
-  linked to the billing system before it starts consuming resources. [Clarify: R1.Q3]
+  linked to the billing system before it starts consuming resources.
 - As a Cloud Provider Admin, I want to create a tenant without providing an external
   billing identifier, so that tenants not billed through an external system are not
   blocked from onboarding.
 - As a Cloud Provider Admin, I want the external billing identifier to be inaccessible
   to Tenant Admins and Tenant Users through any interface, so that billing account
   details are not disclosed to tenants.
-- As a Cloud Provider Admin, I want consumption reported for each tenant to be
-  attributed to the correct external billing account, so that the billing system
-  receives accurate usage data without requiring a manually maintained mapping.
-  [Clarify: R1.Q1]
 
 ---
 
 ## Provenance
 
-Authored: draft @ prd 0.11.5 - 1c6e8de, workspace main @ f0a8211
+Authored: respond @ prd 0.11.5 - 1c6e8de, workspace main @ f0a8211
+Phases: draft, respond
 
-<!-- ai-workflow-provenance:{"schema_version":1,"provenance_kind":"session","workflow":"prd","workflow_version":"0.11.5","ai_workflows":"1c6e8de","source_repo":"f0a8211","source_repo_branch":"main","commits_behind_main":0,"commits_ahead_main":0,"main_ref":"main","phases":["draft"],"authoring_modes":["skill"],"context_changed":false,"origin_untracked":false} -->
+<!-- ai-workflow-provenance:{"schema_version":1,"provenance_kind":"session","workflow":"prd","workflow_version":"0.11.5","ai_workflows":"1c6e8de","source_repo":"f0a8211","source_repo_branch":"main","commits_behind_main":0,"commits_ahead_main":0,"main_ref":"main","phases":["draft","respond"],"authoring_modes":["skill"],"context_changed":false,"origin_untracked":false} -->

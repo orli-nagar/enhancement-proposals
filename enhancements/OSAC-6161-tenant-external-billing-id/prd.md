@@ -54,6 +54,9 @@ causing misattributed or unbillable consumption until an operator corrects it by
 - As a Cloud Provider Admin, I want the external billing identifier to be inaccessible
   to Tenant Admins and Tenant Users through any interface, so that billing account
   details are not disclosed to tenants.
+- As a Cloud Provider Admin, I want to change a tenant's external billing
+  identifier after creation, so that consumption is attributed to the correct
+  account when the tenant's billing account changes.
 
 ---
 

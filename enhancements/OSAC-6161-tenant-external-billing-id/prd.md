@@ -25,7 +25,10 @@ causing misattributed or unbillable consumption until an operator corrects it by
 - For a tenant with a recorded external billing identifier, consumption OSAC
   reports for that tenant can be located under the corresponding account in the
   external billing system, for every metered resource type.
-
+- Changing a tenant's external billing identifier takes effect going forward:
+  consumption OSAC reports after the change is attributed to the new identifier,
+  and consumption already reported under the previous identifier is unchanged.
+  
 ## Out of Scope
 
 - Console UI for setting or reading the identifier — a future increment.
@@ -57,6 +60,6 @@ causing misattributed or unbillable consumption until an operator corrects it by
 ## Provenance
 
 Authored: respond @ prd 0.11.5 - 1c6e8de, workspace main @ f0a8211
-Phases: draft, respond, respond
+Phases: draft, respond, respond, respond
 
-<!-- ai-workflow-provenance:{"schema_version":1,"provenance_kind":"session","workflow":"prd","workflow_version":"0.11.5","ai_workflows":"1c6e8de","source_repo":"f0a8211","source_repo_branch":"main","commits_behind_main":0,"commits_ahead_main":0,"main_ref":"main","phases":["draft","respond","respond"],"authoring_modes":["skill"],"context_changed":false,"origin_untracked":false} -->
+<!-- ai-workflow-provenance:{"schema_version":1,"provenance_kind":"session","workflow":"prd","workflow_version":"0.11.5","ai_workflows":"1c6e8de","source_repo":"f0a8211","source_repo_branch":"main","commits_behind_main":0,"commits_ahead_main":0,"main_ref":"main","phases":["draft","respond","respond","respond"],"authoring_modes":["skill"],"context_changed":false,"origin_untracked":false} -->

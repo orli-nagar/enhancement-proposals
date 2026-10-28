@@ -87,6 +87,7 @@ A billing-id change takes effect in the next fold run that processes an event fo
 ### API Extensions
 
 - **Private `TenantSpec.external_billing_id`.** Optional string on the existing tenant resource. Create, Update, Get, and List on `/api/private/v1/tenants` gain the field. The public tenant messages are unchanged because `proto/public/` is generated.
+- **`Event.external_billing_id`.** Optional string on the shared private `Event` envelope in `proto/private/osac/private/v1/event_type.proto`. The publisher stamps the tenant's current value on every event. Absent when the tenant has none.
 - **`HeartbeatData.external_billing_account_id`.** Optional JSON field on the metering heartbeat payload. Present when the latest `external_billing_id` history fact for that tenant is non-empty. Absent when it is not.
 
 ## UX Alignment
@@ -176,7 +177,7 @@ Test the private field and the heartbeat payload together. Create and update a t
 
 Update semantics: confirm that omitting `external_billing_id` from an Update request clears the stored value (subsequent Get returns no field; subsequent heartbeats omit `external_billing_account_id`). Confirm that a caller who sends the same value on Update preserves it. Confirm that a caller who changes the value on Update stores the new value and that the next fold run propagates it.
 
-End-to-end coverage (belongs in `osac-test-infra/tests/e2e/` as [QE] work): happy path — create a tenant with `external_billing_id` via the private API, provision one billable resource, consume the tenant's heartbeat topic, and assert an arriving heartbeat carries `external_billing_account_id` equal to the set value; negative path — create a tenant without the field, verify heartbeats omit it; change path (FR-4) — update the tenant's id, verify heartbeats published after the change carry the new id and that heartbeats already on the topic are unchanged.
+End-to-end coverage (belongs in the mono-repo's `tests/e2e/` as [QE] work): happy path — create a tenant with `external_billing_id` via the private API, provision one billable resource, consume the tenant's heartbeat topic, and assert an arriving heartbeat carries `external_billing_account_id` equal to the set value; negative path — create a tenant without the field, verify heartbeats omit it; change path (FR-4) — update the tenant's id, verify heartbeats published after the change carry the new id and that heartbeats already on the topic are unchanged.
 
 ## Graduation Criteria
 

@@ -53,6 +53,8 @@ Two components change. The private Fulfillment API gains `TenantSpec.external_bi
 
 A Cloud Provider Admin sets `spec.external_billing_id` on create or update of a tenant through the private API (`/api/private/v1/tenants`). The field is optional, at most 256 characters, and has no format check. Private Get and List return it when set. Public Get and List do not define it. [Locked: D2, D3]
 
+`PrivateTenantsServer` uses full object replacement: an Update request replaces the entire `TenantSpec`. Omitting `external_billing_id` from an Update request clears the stored value; setting it to a new value stores that value. A caller that wants to preserve the existing value while changing other fields must re-send `external_billing_id` in the request.
+
 After the value is stored, the metering pipeline propagates it to heartbeats:
 
 ```mermaid
@@ -80,7 +82,7 @@ sequenceDiagram
 
 On each fold run for a tenant, the Fold calls private Tenant Get, stores `spec.external_billing_id` in `progress.external_billing_id` (clearing it when the tenant has none), and then extracts resource facts into `history`. If the Get fails, the Fold logs at `Warn` and leaves `progress.external_billing_id` unchanged. The Round reads `progress.external_billing_id` for each tenant when it builds a heartbeat and sets `HeartbeatData.external_billing_account_id` when the value is non-empty.
 
-A billing-id change takes effect in the next fold run that processes events for that tenant. Heartbeats already published to the tenant's heartbeat topic stay as they were. [PRD: FR-4]
+A billing-id change takes effect in the next fold run that processes events for that tenant. Outbox entries already written by the Round are immutable; the Round does not update them after a billing-id change. The first Round tick after the Fold updates `progress` will produce new outbox entries carrying the new id, and the Relay will publish those. Heartbeats already published to the tenant's heartbeat topic stay as they were. [PRD: FR-4]
 
 ### API Extensions
 
@@ -126,7 +128,7 @@ ExternalBillingAccountID *string `json:"external_billing_account_id,omitempty"`
 
 The Round reads `progress.external_billing_id` alongside the other per-tenant progress fields and passes it to the heartbeat builder (`heartbeat/event.go`). The builder sets `data.ExternalBillingAccountID` when the value is non-empty.
 
-**`osac-metering/adapters/m360/translate.go`** — after the `HeartbeatDataFields()` loop, add a check: if `data["external_billing_account_id"]` is present and non-empty, copy it to `payload["external_billing_account_id"]`; otherwise skip it. This field is not passed through `nullToSpace`.
+The field is carried on `HeartbeatData` and published to the tenant's heartbeat topic, where an adapter for a billing system that needs the OSAC→account mapping can read it. It is deliberately excluded from `heartbeatDataFields`, so the m360 adapter — which maintains its own account mapping — never receives it. `schema/heartbeat_test.go`'s field-list assertion is widened to skip it, alongside `usage` and `billing_dimensions`.
 
 ### Security Considerations
 
@@ -134,7 +136,7 @@ The private annotation is the access boundary. Public clients have no field to s
 
 ### Failure Handling and Recovery
 
-A value longer than 256 characters is rejected on Create and Update. Omitting the field, or clearing it, is valid: subsequent heartbeats omit `external_billing_account_id`. If the Fold's Tenant Get fails, `progress.external_billing_id` is left unchanged and the next fold run retries the lookup. A changed id takes effect in the next fold run; heartbeats already sent stay as they were. [PRD: FR-4]
+A value longer than 256 characters is rejected on Create and Update. Omitting the field on Update clears the stored value; subsequent heartbeats omit `external_billing_account_id`. If the Fold's Tenant Get fails, `progress.external_billing_id` is left unchanged and the next fold run retries the lookup. Heartbeats continue to use the last known value during the failure window. This is a deliberate tradeoff: blocking heartbeat generation on a lookup failure would stop billing reporting entirely, which is worse than a bounded period of stale attribution. The staleness window is bounded by the next successful fold run. A changed id takes effect in the next fold run; heartbeats already sent stay as they were. [PRD: FR-4]
 
 ### RBAC / Tenancy
 
@@ -146,7 +148,7 @@ No new metrics or alerts. [Locked: D3] A failed tenant lookup is logged at `Warn
 
 ### Risks and Mitigations
 
-The new JSON key is omitted when unset, so existing adapters ignore it. m360 copies it only after the field is added to the heartbeat adapter.
+The new JSON key is omitted when unset, so existing adapters ignore it. m360 never receives it because the field is excluded from `heartbeatDataFields`.
 
 ### Drawbacks
 
@@ -156,14 +158,16 @@ Every fold run for a tenant calls the private Tenant API once. That extra RPC is
 
 | Decision | Alternative | Why it was rejected |
 |----------|-------------|---------------------|
-| Enrich in metering Fold | Each adapter calls the private Tenant API | Duplicates the lookup, gives every adapter a private-API credential, and leaves the heartbeat incomplete for replay. [Research: consumer-side enrichment] |
+| Enrich in metering Fold | Each adapter calls the private Tenant API | Adapters for billing systems without an existing OSAC integration can read the field directly from the heartbeat topic. Adapters such as m360 that already maintain their own OSAC→account mapping exclude the field and are unaffected. Pushing the lookup into every adapter duplicates the credential and API connection requirements. |
 | Field on `HeartbeatData` | CloudEvent extension attribute only | Receivers are not required to forward extension attributes, so a broker can strip the id. Adapters already read `HeartbeatData`. |
 | Private spec field | `metadata.labels` entry | Labels are on the public API and are caller-writable, which breaks FR-2. |
 | Read the tenant on each fold run | In-process cache of the billing id | A cache needs invalidation on tenant update and can use a stale id after a change. Fold runs are per-tenant and infrequent enough that the Get is the smaller design. [User] |
 
 ## Test Plan
 
-Test the private field and the heartbeat payload together. Create and update a tenant with and without `external_billing_id` on the private API, and confirm a public Get omits it. Run a fold for that tenant and confirm `progress.external_billing_id` matches the tenant's current value, including the next fold run after an update, and is cleared when the tenant has none. Confirm the Round sets `HeartbeatData.external_billing_account_id` from `progress` when non-empty and omits it when empty. Confirm the m360 adapter copies the field when present and omits it otherwise, without applying `nullToSpace`. A value longer than 256 characters is rejected. A Tenant Get failure in the Fold leaves `progress.external_billing_id` unchanged.
+Test the private field and the heartbeat payload together. Create and update a tenant with and without `external_billing_id` on the private API, and confirm a public Get omits it. Run a fold for that tenant and confirm `progress.external_billing_id` matches the tenant's current value, including the next fold run after an update, and is cleared when the tenant has none. Confirm the Round sets `HeartbeatData.external_billing_account_id` from `progress` when non-empty and omits it when empty. Confirm the m360 payload contains no `external_billing_account_id` even when the tenant has a billing id set. A value longer than 256 characters is rejected. A Tenant Get failure in the Fold leaves `progress.external_billing_id` unchanged and heartbeats continue to use the last stored value.
+
+Update semantics: confirm that omitting `external_billing_id` from an Update request clears the stored value (subsequent Get returns no field; subsequent heartbeats omit `external_billing_account_id`). Confirm that a caller who sends the same value on Update preserves it. Confirm that a caller who changes the value on Update stores the new value and that the next fold run propagates it.
 
 ## Graduation Criteria
 

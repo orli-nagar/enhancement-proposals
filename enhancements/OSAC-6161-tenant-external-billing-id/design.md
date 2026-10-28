@@ -20,19 +20,19 @@ superseded-by:
 
 ## Summary
 
-Add an optional, opaque `external_billing_id` to private `TenantSpec`, set through the private Fulfillment API, and have the metering Fold read it from the tenant and store it in the `progress` table so each `HeartbeatData` the Round publishes carries the external billing account identifier. See [PRD](prd.md) for requirements.
+Add an optional, opaque `external_billing_id` to private `TenantSpec`, set through the private Fulfillment API. The fulfillment event publisher stamps the value on every event envelope it publishes for that tenant, and the metering Fold records the latest value as a `history` fact so each `HeartbeatData` the Round publishes carries the external billing account identifier. See [PRD](prd.md) for requirements.
 
 ## Motivation
 
 OSAC meters tenant consumption and publishes heartbeats to a per-tenant Kafka topic. Downstream billing adapters route those heartbeats using their own account identifiers, which are unrelated to OSAC tenant names. `TenantSpec` has no field for that identifier, and `HeartbeatData` carries only the OSAC `tenant_id`.
 
-This design stores the identifier on the private tenant. The metering Fold reads it from the tenant event the existing event stream already delivers and records it in `history`; the Round reads the latest fact and carries it into every `HeartbeatData` it writes.
+This design stores the identifier on the private tenant. The fulfillment event publisher stamps it on the envelope of every event it publishes for that tenant; the metering Fold reads the envelope field from every event and records the latest value as a `history` fact; the Round carries it into every `HeartbeatData` it writes.
 
 ### Goals
 
 - Add optional `external_billing_id` to private `TenantSpec`, set and read through the private Fulfillment API. [Locked: D2]
 - Keep the field out of the generated public schema. [PRD: FR-2]
-- Set `HeartbeatData.external_billing_account_id` by reading the latest `external_billing_id` fact the Fold writes to `history` from the tenant event stream. [User]
+- Set `HeartbeatData.external_billing_account_id` by reading the latest `external_billing_id` fact the Fold writes to `history` from the event envelope. [User]
 - Apply billing-id changes to later heartbeats only. [PRD: FR-4]
 - Store the field in the existing tenant JSONB document. No SQL migration in fulfillment-service or metering.
 
@@ -45,9 +45,9 @@ This design stores the identifier on the private tenant. The metering Fold reads
 
 ## Proposal
 
-Two components change. The private Fulfillment API gains `TenantSpec.external_billing_id`. The metering Fold reads that value from the tenant event it already consumes and writes it as a fact to `history`; the Round reads the latest fact and sets `HeartbeatData.external_billing_account_id`.
+Two components change. The private Fulfillment API gains `TenantSpec.external_billing_id`. The event publisher stamps the value on the envelope of every event it publishes for that tenant; the metering Fold reads `event.GetExternalBillingId()` on every event and writes a `history` fact when the value changes; the Round reads the latest fact and sets `HeartbeatData.external_billing_account_id`.
 
-`[(cleanapi.field).private = true]` makes `protoc-gen-cleanapi` omit the field from the public proto. When a tenant Create or Update event arrives on the tenant's event topic, the Fold extracts `spec.external_billing_id` and writes a `history` fact for it. The Round reads the latest `external_billing_id` fact for the tenant when it builds each heartbeat. [User]
+`[(cleanapi.field).private = true]` makes `protoc-gen-cleanapi` omit `TenantSpec.external_billing_id` from the public proto. The publisher performs one lookup per drained batch — collecting distinct tenants, running a single SELECT against `tenants`, and stamping each event — so any event for the tenant carries the current value. The Fold writes a fact only when the value differs from the latest stored one, so `history` does not grow with event volume. The Round reads the latest `external_billing_id` fact for the tenant when it builds each heartbeat. [User]
 
 ### Workflow Description
 
@@ -69,11 +69,10 @@ sequenceDiagram
 
     Admin->>FS: Create/Update Tenant (spec.external_billing_id)
     FS->>FS: Persist in tenant JSONB
-    FS->>FK: Publish tenant event (spec.external_billing_id)
-    Fold->>FK: Consume tenant event from tenant's event topic
-    Fold->>MDB: Write history fact (Tenant, external_billing_id, value)
-    Note over Fold: Later: resource events arrive
-    Fold->>FK: Consume resource events
+    Note over FS: On any resource event for the tenant
+    FS->>FK: Publish event (envelope.external_billing_id stamped)
+    Fold->>FK: Consume event
+    Fold->>MDB: Write history fact if external_billing_id changed
     Fold->>MDB: Write resource facts to history
     Round->>MDB: Read history + rules, compute heartbeats
     Round->>MDB: Read latest external_billing_id fact for tenant
@@ -81,9 +80,9 @@ sequenceDiagram
     Relay->>HK: Drain outbox, publish heartbeat to tenant's heartbeat topic
 ```
 
-The `tenants` table has the same `enqueue_change` trigger as every other object table, so creating or updating a tenant publishes an event carrying the full `TenantSpec` to the tenant's own event topic — the same topic the Fold already consumes. When the Fold encounters a Tenant event, it extracts `spec.external_billing_id` and writes a `history` fact for `(tenant, "Tenant", tenant, "external_billing_id", event_timestamp, value, offset)`. If the tenant has no `external_billing_id`, it writes an empty value, signaling no billing id is set. The Round reads the latest `external_billing_id` fact for each tenant when it builds a heartbeat and sets `HeartbeatData.external_billing_account_id` when the value is non-empty.
+The publisher already knows each event's tenant (`payloadIdentity`). Before publishing a batch, it collects the batch's distinct tenants, runs one SELECT against `tenants`, and stamps `external_billing_id` on each event's envelope. No join in the write path, no cache, no invalidation problem. The Fold reads `event.GetExternalBillingId()` on every event and writes a `history` fact `(tenant, "Tenant", tenant, "external_billing_id", event_timestamp, value, offset)` only when the value differs from the latest stored one. An empty envelope field signals no billing id is set. The Round reads the latest `external_billing_id` fact for each tenant when it builds a heartbeat and sets `HeartbeatData.external_billing_account_id` when the value is non-empty.
 
-A billing-id change takes effect in the next fold run that processes events for that tenant. Outbox entries already written by the Round are immutable; the Round does not update them after a billing-id change. The first Round tick after the Fold updates `progress` will produce new outbox entries carrying the new id, and the Relay will publish those. Heartbeats already published to the tenant's heartbeat topic stay as they were. [PRD: FR-4]
+A billing-id change takes effect in the next fold run that processes an event for that tenant. Outbox entries already written by the Round are immutable; the Round does not update them after a billing-id change. The first Round tick after the Fold writes the new `history` fact produces new outbox entries carrying the new id, and the Relay publishes those. Heartbeats already published to the tenant's heartbeat topic stay as they were. [PRD: FR-4]
 
 ### API Extensions
 
@@ -115,11 +114,15 @@ Regenerate with `make -C proto generate` and lint with `buf lint`. Do not edit `
 
 `PrivateTenantsServer` persists the proto as JSONB through `GenericServer` and `GenericDAO`. No server change and no SQL migration. The public `GenericMapper` copies fields by name; the generated public `TenantSpec` has no `external_billing_id`, so the value is never copied to a public response. The existing protovalidate interceptor enforces the 256-character limit on Create and Update.
 
-The field rides the event stream automatically with no further fulfillment changes. The `enqueue_change` trigger copies the full tenant row as JSONB into the `changes` table on every write. The event publisher's `protojson.Unmarshal` call unmarshals the entire JSONB blob into the proto message in one shot — any field present on the proto rides the Kafka event once codegen runs. `redactEvent` for tenant events only clears `status.break_glass_credentials`; it does not touch the spec. No trigger change, no publisher change.
+Two fulfillment files change beyond the proto:
+
+**`proto/private/osac/private/v1/event_type.proto`** — add an optional `external_billing_id` envelope field to the shared `Event` message (alongside `id`, `timestamp`, etc.). Regenerate with `make -C proto generate`.
+
+**`fulfillment-service/internal/servers/event_publisher.go`** — in the drain loop, before publishing each batch, collect the batch's distinct tenants, run one SELECT against `tenants` to read `spec.external_billing_id` for each, and stamp the field on the `Event` envelope. No trigger change and no join in the database write path. `redactEvent` does not touch the envelope field.
 
 In metering, changes touch two files. No schema migration is needed: the `history` table already has the right shape (`tenant`, `resource_type`, `resource_id`, `field`, `since`, `value`, `event_offset`) and the `progress` table is unchanged.
 
-**`osac-metering/metering-service/internal/fold/facts.go`** — the Fold currently skips tenant events entirely (the tenant resource type is not in the billable-resource registry). Add handling for the tenant payload: when `event.HasTenant()`, read `event.GetTenant().GetSpec().GetExternalBillingId()` — a regular field access on the proto, no different from reading any other spec field — and write a `history` fact `(tenant, "Tenant", tenant, "external_billing_id", event_timestamp, value, offset)`. An unset field writes an empty value. The same idempotency guarantee applies: replaying the event topic produces the same facts. No metering annotation is added to the proto; `external_billing_id` is not a billing meter field and does not go through the `metering.Resources()` registry.
+**`osac-metering/metering-service/internal/fold/facts.go`** — on every event, read `event.GetExternalBillingId()` from the envelope and write a `history` fact `(tenant, "Tenant", tenant, "external_billing_id", event_timestamp, value, offset)` only when the value differs from the latest stored one. An empty envelope field writes an empty value, signaling no billing id is set. No payload type check, no special case for tenant events. The same idempotency guarantee applies: replaying the event topic produces the same facts. No metering annotation is added to the proto; `external_billing_id` is not a billing meter field and does not go through the `metering.Resources()` registry.
 
 **`osac-metering/schema/heartbeat.go`** — add the field to `HeartbeatData`:
 
@@ -137,7 +140,7 @@ The private annotation is the access boundary. Public clients have no field to s
 
 ### Failure Handling and Recovery
 
-A value longer than 256 characters is rejected on Create and Update. Omitting the field on Update clears the stored value; the Fold writes an empty-value fact and subsequent heartbeats omit `external_billing_account_id`. If no tenant event has been consumed yet (first boot or replay), no `external_billing_id` fact exists and heartbeats omit the field until the tenant event arrives. A changed id is a new fact with a new `since` timestamp, so FR-4 (changes apply going forward) falls out naturally; heartbeats already published stay as they were. [PRD: FR-4]
+A value longer than 256 characters is rejected on Create and Update. Omitting the field on Update clears the stored value; subsequent events carry an empty envelope field, the Fold writes an empty-value fact, and subsequent heartbeats omit `external_billing_account_id`. If no event has been consumed yet (first boot or replay from an empty topic), no `external_billing_id` fact exists and heartbeats omit the field until the first event arrives. A changed id is a new fact with a new `since` timestamp, so FR-4 (changes apply going forward) falls out naturally; heartbeats already published stay as they were. [PRD: FR-4]
 
 ### RBAC / Tenancy
 
@@ -151,13 +154,11 @@ No new metrics or alerts. [Locked: D3] No new log lines. The field flows through
 
 The new JSON key is omitted when unset, so existing adapters ignore it. m360 never receives it because the field is excluded from `heartbeatDataFields`.
 
-**In-place upgrade gap:** A tenant whose `external_billing_id` was set before this release will not surface the id in heartbeats until its next tenant Create or Update event is consumed by the Fold, because the older events were already consumed and skipped. A full replay from offset zero fixes it. Operators migrating an existing deployment should issue a no-op Update on affected tenants after deploying.
-
-**Kafka retention edge:** If Kafka retention deletes a quiet tenant's tenant events before a replay, the id is lost and will not appear in heartbeats until the next tenant Update. The in-place upgrade mitigation (no-op Update) also covers this.
+**In-place upgrade gap and retention edge:** Because the publisher stamps `external_billing_id` on every event, any event after upgrade carries the current id and the newest retained event always carries the newest id. A replay from any retained offset converges to the current value. No no-op Update is required. Operators may issue one as a convenience to surface the id sooner on a quiet tenant.
 
 ### Drawbacks
 
-None beyond the in-place upgrade gap and Kafka retention edge documented in Risks and Mitigations. Metering retains its existing two-dependency model (Kafka and PostgreSQL) and the rebuild-from-Kafka invariant.
+The publisher performs one extra SELECT per drained batch. Metering retains its existing two-dependency model (Kafka and PostgreSQL) and the rebuild-from-Kafka invariant.
 
 ## Alternatives (Not Implemented)
 
@@ -166,11 +167,12 @@ None beyond the in-place upgrade gap and Kafka retention edge documented in Risk
 | Enrich in metering Fold | Each adapter calls the private Tenant API | Adapters for billing systems without an existing OSAC integration can read the field directly from the heartbeat topic. Adapters such as m360 that already maintain their own OSAC→account mapping exclude the field and are unaffected. Pushing the lookup into every adapter duplicates the credential and API connection requirements. |
 | Field on `HeartbeatData` | CloudEvent extension attribute only | Receivers are not required to forward extension attributes, so a broker can strip the id. Adapters already read `HeartbeatData`. |
 | Private spec field | `metadata.labels` entry | Labels are on the public API and are caller-writable, which breaks FR-2. |
-| Read id from event stream (chosen) | Fold calls `TenantsClient.Get` on each fold run | The API-call approach fetches the current value but adds the first runtime dependency from metering to fulfillment (credentials, gRPC client, failure path) and breaks the rebuild-from-Kafka invariant the schema states. The event stream delivers the id at exactly the moments it can change (tenant create/update). The trade-off is an in-place upgrade gap (see Risks). |
+| Publisher-stamped envelope (chosen) | Fold calls `TenantsClient.Get` on each fold run | The API-call approach adds the first runtime dependency from metering to fulfillment (credentials, gRPC client, failure path) and breaks the rebuild-from-Kafka invariant. |
+| Publisher-stamped envelope (chosen) | Tenant-events-only (read `spec.external_billing_id` from Tenant payload) | Zero fulfillment code, but the id refreshes only on tenant writes, leaving an in-place upgrade gap and a Kafka retention edge for quiet tenants. The publisher-stamped approach eliminates both at the cost of one contained fulfillment change. |
 
 ## Test Plan
 
-Test the private field and the heartbeat payload together. Create and update a tenant with and without `external_billing_id` on the private API, and confirm a public Get omits it. Publish the resulting tenant event to the Fold and confirm the `history` table holds the correct `external_billing_id` fact, including after an update and after a clear (omitting the field on Update). Confirm the Round sets `HeartbeatData.external_billing_account_id` from the latest history fact when non-empty and omits it when empty or absent. Confirm the m360 payload contains no `external_billing_account_id` even when the tenant has a billing id set. A value longer than 256 characters is rejected.
+Test the private field and the heartbeat payload together. Create and update a tenant with and without `external_billing_id` on the private API, and confirm a public Get omits it. Assert the publisher stamps the correct `external_billing_id` on event envelopes for that tenant and omits it when the tenant has none. Publish events to the Fold and confirm the `history` table holds the correct `external_billing_id` fact when the envelope value changes, and does not grow when the value is unchanged. Confirm the Round sets `HeartbeatData.external_billing_account_id` from the latest history fact when non-empty and omits it when empty or absent. Confirm the m360 payload contains no `external_billing_account_id` even when the tenant has a billing id set. A value longer than 256 characters is rejected.
 
 Update semantics: confirm that omitting `external_billing_id` from an Update request clears the stored value (subsequent Get returns no field; subsequent heartbeats omit `external_billing_account_id`). Confirm that a caller who sends the same value on Update preserves it. Confirm that a caller who changes the value on Update stores the new value and that the next fold run propagates it.
 
@@ -186,11 +188,11 @@ The field is optional. Upgrade needs no migration in fulfillment-service. Downgr
 
 ## Version Skew Strategy
 
-An older fulfillment-service ignores the field on input and omits it on output. An older metering build omits `HeartbeatData.external_billing_account_id`. If metering is upgraded first, tenant events carry no `external_billing_id` field until fulfillment-service is upgraded, and heartbeats published in that window omit the field.
+An older fulfillment-service ignores the field on input and omits it on output. An older metering build omits `HeartbeatData.external_billing_account_id`. If metering is upgraded first, event envelopes carry no `external_billing_id` until fulfillment-service is upgraded, and heartbeats published in that window omit the field.
 
 ## Support Procedures
 
-If heartbeats for a tenant lack `external_billing_account_id`, read the tenant on the private API and confirm `external_billing_id` is set. If it is set but heartbeats still omit the field, the tenant event may not have been consumed by the Fold yet — issuing a no-op Update on the tenant triggers a new event and a new fold run. Heartbeats already published are not replayed.
+If heartbeats for a tenant lack `external_billing_account_id`, read the tenant on the private API and confirm `external_billing_id` is set. If it is set but heartbeats still omit the field, no event for that tenant has been published and folded since the id was stored. The next event of any kind carries the current id on its envelope. Heartbeats already published are not replayed.
 
 ## Infrastructure Needed
 
